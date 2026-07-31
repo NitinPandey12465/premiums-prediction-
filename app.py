@@ -14,7 +14,7 @@ st.set_page_config(page_title="Premium Predictor", page_icon="💰", layout="wid
 # ============================================================
 # LOAD MODEL, ENCODERS, FEATURE LIST
 # ============================================================
-MODEL_DIR = "models"
+MODEL_DIR = "."
 
 @st.cache_resource
 def load_artifacts():
