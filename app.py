@@ -160,6 +160,74 @@ def load_raw_data():
 model, feature_list, encoders = load_artifacts()
 raw_df = load_raw_data()
 
+REFERENCE_METRICS = {"r2": 0.9806, "mae": 793.0, "median_err": 398.0, "within_10pct": 70.1}
+
+@st.cache_data
+def compute_live_metrics(_model, _feature_list, _encoders, df):
+    """Recomputes held-out test metrics from the raw data using the same
+    feature engineering as training, so the numbers shown always reflect
+    whichever model file is actually loaded, not a hardcoded string."""
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import r2_score, mean_absolute_error
+
+    d = df.copy()
+    d = d.dropna(subset=["Employment_Status", "Income_Level"]).copy()
+    d["Smoking_Status"] = d["Smoking_Status"].replace({
+        "No Smoking": "Non-Smoker", "Not Smoking": "Non-Smoker",
+        "Does Not Smoke": "Non-Smoker", "Smoking=0": "Non-Smoker",
+    })
+    d["Smoking_Status"] = d["Smoking_Status"].fillna("Non-Smoker")
+    d = d[d["Age"] <= 100].copy()
+    d["Number Of Dependants"] = d["Number Of Dependants"].abs()
+
+    d["has_diabetes"] = d["Medical History"].str.contains("Diabetes").astype(int)
+    d["has_high_bp"] = d["Medical History"].str.contains("High blood pressure").astype(int)
+    d["has_thyroid"] = d["Medical History"].str.contains("Thyroid").astype(int)
+    d["has_heart_disease"] = d["Medical History"].str.contains("Heart disease").astype(int)
+    d["disease_count"] = d["has_diabetes"] + d["has_high_bp"] + d["has_thyroid"] + d["has_heart_disease"]
+    d["age_band"] = pd.cut(d["Age"], bins=[0, 18, 30, 45, 60, 100],
+                             labels=["0-18", "19-30", "31-45", "46-60", "61+"])
+    d["bmi_smoking"] = d["BMI_Category"] + "_" + d["Smoking_Status"]
+    d["gender_smoking"] = d["Gender"] + "_" + d["Smoking_Status"]
+    d["income_per_dependant"] = d["Income_Lakhs"] / (d["Number Of Dependants"] + 1)
+    d["age_x_disease_count"] = d["Age"] * d["disease_count"]
+
+    try:
+        for col, le in _encoders.items():
+            known = set(le.classes_)
+            mask = d[col].astype(str).isin(known)
+            if not mask.all():
+                d = d[mask]
+            d[col + "_enc"] = le.transform(d[col].astype(str))
+
+        d["gender_smoking_encoded"] = d["gender_smoking_enc"]
+        d["smoking_encoded"] = d["Smoking_Status_enc"]
+
+        missing = [f for f in _feature_list if f not in d.columns]
+        if missing:
+            return None
+
+        X = d[_feature_list]
+        y = d["Annual_Premium_Amount"]
+        _, X_test, _, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        preds = _model.predict(X_test)
+        r2 = r2_score(y_test, preds)
+        mae = mean_absolute_error(y_test, preds)
+        err_pct = (abs(preds - y_test.values) / y_test.values) * 100
+        median_err = float(np.median(abs(preds - y_test.values)))
+        within_10 = float((err_pct < 10).mean() * 100)
+
+        return {"r2": r2, "mae": mae, "median_err": median_err, "within_10pct": within_10}
+    except Exception:
+        return None
+
+if raw_df is not None:
+    live_metrics = compute_live_metrics(model, feature_list, encoders, raw_df)
+    METRICS = live_metrics if live_metrics else REFERENCE_METRICS
+else:
+    METRICS = REFERENCE_METRICS
+
 # ============================================================
 # HEADER
 # ============================================================
@@ -184,13 +252,25 @@ with st.sidebar:
     )
     st.markdown("**Held-out test performance**")
     st.markdown(
-        """
-        - R2 Score: `0.9806`
-        - MAE: `Rs 793`
-        - Median Error: `Rs 398`
+        f"""
+        - R2 Score: `{METRICS['r2']:.4f}`
+        - MAE: `Rs {METRICS['mae']:.0f}`
+        - Median Error: `Rs {METRICS['median_err']:.0f}`
         """
     )
     st.markdown("---")
+
+    with st.expander("How this works"):
+        st.markdown(
+            "Raw customer records were cleaned (corrupted ages, sign errors, "
+            "inconsistent categories), engineered into risk-relevant features "
+            "(disease flags, age bands, BMI-smoking interactions), narrowed down "
+            "via VIF / Mutual Information / RFE, then used to train and compare "
+            "Linear Regression, Random Forest, and XGBoost models. The best "
+            "model (XGBoost) is deployed here, evaluated on data it never saw "
+            "during training."
+        )
+
     st.markdown(f"[View source code on GitHub]({GITHUB_URL})")
 
 # ============================================================
@@ -294,15 +374,26 @@ with tab1:
 
             X_input = pd.DataFrame([row])[feature_list]
             prediction = model.predict(X_input)[0]
+            margin = METRICS["mae"]
+            low, high = max(0, prediction - margin), prediction + margin
 
             st.markdown(
                 f"""
                 <div class="prediction-result">
                     <div class="prediction-label">Predicted Annual Premium</div>
                     <div class="prediction-value">Rs {prediction:,.2f}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:0.78rem;opacity:0.75;margin-top:0.4rem;">
+                        typical range Rs {low:,.0f} &ndash; Rs {high:,.0f}
+                    </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
+            )
+            st.caption(
+                "Range reflects the model's average error (MAE) on unseen test data, "
+                "not a statistical confidence interval. Predictions for uncommon "
+                "profile combinations (e.g. very young age with severe medical history) "
+                "may be less reliable, since the model has fewer similar examples to learn from."
             )
 
         except Exception as e:
@@ -315,8 +406,13 @@ with tab2:
     st.subheader("Held-Out Test Set Performance")
 
     m1, m2, m3, m4 = st.columns(4)
-    metrics = [("Test R2", "0.9806"), ("Test MAE", "Rs 793"), ("Median Error", "Rs 398"), ("Within 10% Error", "70.1%")]
-    for col, (label, value) in zip([m1, m2, m3, m4], metrics):
+    metrics_display = [
+        ("Test R2", f"{METRICS['r2']:.4f}"),
+        ("Test MAE", f"Rs {METRICS['mae']:.0f}"),
+        ("Median Error", f"Rs {METRICS['median_err']:.0f}"),
+        ("Within 10% Error", f"{METRICS['within_10pct']:.1f}%"),
+    ]
+    for col, (label, value) in zip([m1, m2, m3, m4], metrics_display):
         col.markdown(
             f'<div class="metric-card"><div class="label">{label}</div><div class="value">{value}</div></div>',
             unsafe_allow_html=True,
