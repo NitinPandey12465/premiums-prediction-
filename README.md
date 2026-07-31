@@ -3,7 +3,7 @@
 An end-to-end machine learning project predicting annual insurance premiums from customer demographic, health, and financial data — covering the full ML lifecycle from raw data to a deployed Streamlit app.
 
 **Live App:** [Add your Streamlit Cloud link here after deployment]
-
+https://github.com/NitinPandey12465/premiums-prediction-
 ## Overview
 
 This project predicts `Annual_Premium_Amount` for 50,000 insurance customers using an XGBoost regression model, achieving a **Test R² of 0.9806** and a median prediction error of **₹398**.
