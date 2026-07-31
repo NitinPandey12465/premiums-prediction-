@@ -42,7 +42,7 @@ st.sidebar.markdown(
 )
 st.sidebar.markdown("---")
 st.sidebar.markdown(
-    "🔗 [View source code on GitHub](https://github.com/YOUR_USERNAME/premium-prediction)"
+     [View source code on GitHub](https://github.com/NitinPandey12465/premiums-prediction-)"
 )
 
 # ============================================================
@@ -217,4 +217,4 @@ with tab3:
     )
 
 st.markdown("---")
-st.caption("Built with Streamlit • Model: XGBoost • [GitHub Repository](https://github.com/YOUR_USERNAME/premium-prediction)")
+st.caption("Built with Streamlit • Model: XGBoost • [GitHub Repository](https://github.com/NitinPandey12465/premiums-prediction-)")
